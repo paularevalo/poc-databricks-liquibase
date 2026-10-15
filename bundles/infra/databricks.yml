@@ -1,0 +1,96 @@
+# Bundle 1/2 — Infraestructura del sandbox
+#   - Proyecto Lakebase Autoscaling (crea automáticamente el branch "production"
+#     con su endpoint "primary" y la base "databricks_postgres")
+#   - Esquema UC para los datos sintéticos
+#   - Job serverless que genera las historias clínicas sintéticas (Delta)
+#
+# Sintaxis validada contra el JSON schema oficial de bundles (Databricks CLI v1.21.0).
+# Requiere Databricks CLI >= 1.0.0.
+
+bundle:
+  name: lakebase-sandbox-infra
+
+variables:
+  project_id:
+    description: ID del proyecto Lakebase (minúsculas, números y guiones; 1-63 chars)
+    default: hcl-sandbox
+  run_id:
+    description: Identificador de la corrida, se usa como tag de costos
+    default: manual
+  catalog:
+    description: Catálogo UC donde se escriben las tablas Delta sintéticas
+    default: workspace
+  schema:
+    description: Esquema UC para las tablas sintéticas
+    default: hcl_sintetico
+  num_pacientes:
+    description: Número de pacientes a generar
+    default: "10000"
+  atenciones_por_paciente:
+    description: Promedio de atenciones por paciente
+    default: "10"
+  nota_bytes:
+    description: Tamaño aproximado de la nota clínica por atención (bytes)
+    default: "2000"
+
+resources:
+  postgres_projects:
+    hcl:
+      project_id: ${var.project_id}
+      display_name: "HCL sandbox (datos sinteticos)"
+      pg_version: 17
+      # bundle destroy elimina el proyecto de forma permanente (sin soft-delete de 7 días)
+      purge_on_delete: true
+      custom_tags:
+        - key: cost-center
+          value: poc-lakebase
+        - key: test-run
+          value: ${var.run_id}
+        - key: synthetic
+          value: "true"
+
+  schemas:
+    sintetico:
+      catalog_name: ${var.catalog}
+      name: ${var.schema}
+      comment: "Historias clinicas 100% SINTETICAS para pruebas de arquitectura. No contiene datos reales."
+
+  jobs:
+    generar_datos:
+      name: "[sandbox] generar historias clinicas sinteticas"
+      tags:
+        cost-center: poc-lakebase
+        test-run: ${var.run_id}
+      max_concurrent_runs: 1
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${resources.schemas.sintetico.name}
+        - name: num_pacientes
+          default: ${var.num_pacientes}
+        - name: atenciones_por_paciente
+          default: ${var.atenciones_por_paciente}
+        - name: nota_bytes
+          default: ${var.nota_bytes}
+      tasks:
+        - task_key: generar
+          environment_key: default
+          spark_python_task:
+            python_file: ./src/generar_datos_clinicos.py
+            parameters:
+              - "--catalog={{job.parameters.catalog}}"
+              - "--schema={{job.parameters.schema}}"
+              - "--num-pacientes={{job.parameters.num_pacientes}}"
+              - "--atenciones-por-paciente={{job.parameters.atenciones_por_paciente}}"
+              - "--nota-bytes={{job.parameters.nota_bytes}}"
+      environments:
+        - environment_key: default
+          spec:
+            # Versión de entorno serverless; ajústala si tu workspace reporta otra disponible
+            environment_version: "3"
+
+targets:
+  sandbox:
+    default: true
+    # El host se toma de la variable de entorno DATABRICKS_HOST

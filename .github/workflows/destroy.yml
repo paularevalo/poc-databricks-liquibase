@@ -1,0 +1,89 @@
+name: Sandbox Lakebase - destruir
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmar:
+        description: 'Escribe DESTRUIR para confirmar'
+        required: true
+      borrar_datos_delta:
+        description: "Borrar también el esquema UC con las tablas sintéticas"
+        type: boolean
+        default: true
+
+concurrency:
+  group: lakebase-sandbox
+  cancel-in-progress: false
+
+env:
+  DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+  DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+  DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+  DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+  PROJECT_ID: ${{ vars.PROJECT_ID || 'hcl-sandbox' }}
+  UC_CATALOG: ${{ vars.UC_CATALOG || 'workspace' }}
+  UC_SCHEMA: ${{ vars.UC_SCHEMA || 'hcl_sintetico' }}
+  CLI_VERSION: "1.21.0"
+
+jobs:
+  destruir:
+    if: ${{ inputs.confirmar == 'DESTRUIR' }}
+    runs-on: ubuntu-latest
+    environment: sandbox
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: databricks/setup-cli@main
+        with:
+          version: ${{ env.CLI_VERSION }}
+
+      # Orden recomendado por Databricks: primero synced tables, luego el proyecto.
+      - name: Destruir synced tables
+        working-directory: bundles/sync
+        run: >
+          databricks bundle destroy -t sandbox --auto-approve
+          --var="project_id=${PROJECT_ID}"
+          --var="catalog=${UC_CATALOG}" --var="schema=${UC_SCHEMA}"
+          || echo "::warning::bundle sync ya estaba destruido o falló; se continúa"
+
+      - name: Conservar el esquema UC (si se pidió)
+        if: ${{ !inputs.borrar_datos_delta }}
+        working-directory: bundles/infra
+        # Desliga el esquema del bundle para que destroy no lo borre
+        run: >
+          databricks bundle deployment unbind sintetico -t sandbox
+          --var="project_id=${PROJECT_ID}"
+          --var="catalog=${UC_CATALOG}" --var="schema=${UC_SCHEMA}"
+
+      - name: Destruir proyecto Lakebase, job y esquema
+        working-directory: bundles/infra
+        # purge_on_delete=true en el bundle → borrado permanente, sin soft-delete de 7 días
+        run: >
+          databricks bundle destroy -t sandbox --auto-approve
+          --var="project_id=${PROJECT_ID}"
+          --var="catalog=${UC_CATALOG}" --var="schema=${UC_SCHEMA}"
+
+      - name: Limpieza de respaldo
+        if: always()
+        run: |
+          # Si el proyecto quedó (activo o soft-deleted), se purga
+          if databricks postgres list-projects --show-deleted -o json \
+               | jq -e --arg p "projects/${PROJECT_ID}" '[.. | objects | select(.name? == $p)] | length > 0' >/dev/null; then
+            echo "Purgando proyecto remanente projects/${PROJECT_ID}"
+            databricks postgres delete-project "projects/${PROJECT_ID}" --purge || true
+          fi
+          # Si el esquema sobrevivió (p. ej. tablas creadas fuera del bundle)
+          if [[ "${{ inputs.borrar_datos_delta }}" == "true" ]]; then
+            databricks schemas delete "${UC_CATALOG}.${UC_SCHEMA}" --force 2>/dev/null \
+              && echo "Esquema ${UC_CATALOG}.${UC_SCHEMA} eliminado" || true
+          fi
+
+      - name: Verificación final
+        run: |
+          restantes=$(databricks postgres list-projects --show-deleted -o json \
+            | jq --arg p "projects/${PROJECT_ID}" '[.. | objects | select(.name? == $p)] | length')
+          if [[ "${restantes}" != "0" ]]; then
+            echo "::error::El proyecto projects/${PROJECT_ID} sigue existiendo"; exit 1
+          fi
+          echo "### Sandbox destruido: projects/${PROJECT_ID} no existe (ni en soft-delete)" >> "$GITHUB_STEP_SUMMARY"

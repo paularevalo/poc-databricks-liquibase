@@ -1,0 +1,133 @@
+name: Sandbox Lakebase - desplegar
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Identificador de la corrida (tag de costos)"
+        default: "r1"
+      num_pacientes:
+        description: "Pacientes a generar (10000 ≈ 100k atenciones)"
+        default: "10000"
+      nota_bytes:
+        description: "Tamaño aprox. de la nota clínica por atención (bytes)"
+        default: "2000"
+      solo_smoke_test:
+        description: "Saltar despliegue y solo repetir el smoke test"
+        type: boolean
+        default: false
+
+concurrency:
+  group: lakebase-sandbox
+  cancel-in-progress: false
+
+env:
+  # Autenticación unificada de Databricks: usa OAuth M2M (client id/secret) si existe,
+  # o un token (DATABRICKS_TOKEN) como alternativa.
+  DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+  DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+  DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+  DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+  PROJECT_ID: ${{ vars.PROJECT_ID || 'hcl-sandbox' }}
+  UC_CATALOG: ${{ vars.UC_CATALOG || 'workspace' }}
+  UC_SCHEMA: ${{ vars.UC_SCHEMA || 'hcl_sintetico' }}
+  CLI_VERSION: "1.21.0"
+
+jobs:
+  desplegar:
+    runs-on: ubuntu-latest
+    environment: sandbox          # permite exigir aprobación manual en GitHub
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: databricks/setup-cli@main
+        with:
+          version: ${{ env.CLI_VERSION }}
+
+      - name: Instalar cliente psql
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client jq
+
+      - name: Verificar identidad
+        run: databricks current-user me -o json | jq '{userName, displayName}'
+
+      # ---------- 1. Infraestructura ----------
+      - name: Validar bundle de infraestructura
+        if: ${{ !inputs.solo_smoke_test }}
+        working-directory: bundles/infra
+        run: >
+          databricks bundle validate -t sandbox
+          --var="project_id=${PROJECT_ID}" --var="run_id=${{ inputs.run_id }}"
+          --var="catalog=${UC_CATALOG}" --var="schema=${UC_SCHEMA}"
+
+      - name: Desplegar proyecto Lakebase, esquema UC y job
+        if: ${{ !inputs.solo_smoke_test }}
+        working-directory: bundles/infra
+        run: >
+          databricks bundle deploy -t sandbox --auto-approve
+          --var="project_id=${PROJECT_ID}" --var="run_id=${{ inputs.run_id }}"
+          --var="catalog=${UC_CATALOG}" --var="schema=${UC_SCHEMA}"
+          --var="num_pacientes=${{ inputs.num_pacientes }}"
+          --var="nota_bytes=${{ inputs.nota_bytes }}"
+
+      # ---------- 2. Datos sintéticos ----------
+      - name: Generar historias clínicas sintéticas (job serverless)
+        if: ${{ !inputs.solo_smoke_test }}
+        working-directory: bundles/infra
+        run: >
+          databricks bundle run generar_datos -t sandbox
+          --var="project_id=${PROJECT_ID}" --var="run_id=${{ inputs.run_id }}"
+          --var="catalog=${UC_CATALOG}" --var="schema=${UC_SCHEMA}"
+          --var="num_pacientes=${{ inputs.num_pacientes }}"
+          --var="nota_bytes=${{ inputs.nota_bytes }}"
+
+      # ---------- 3. Delta → Lakebase ----------
+      - name: Desplegar synced tables
+        if: ${{ !inputs.solo_smoke_test }}
+        working-directory: bundles/sync
+        run: >
+          databricks bundle deploy -t sandbox --auto-approve
+          --var="project_id=${PROJECT_ID}"
+          --var="catalog=${UC_CATALOG}" --var="schema=${UC_SCHEMA}"
+
+      - name: Esperar carga inicial
+        if: ${{ !inputs.solo_smoke_test }}
+        run: bash scripts/esperar_sync.sh
+
+      # ---------- 4. Data API ----------
+      - name: Habilitar Data API
+        if: ${{ !inputs.solo_smoke_test }}
+        run: bash scripts/habilitar_data_api.sh
+
+      - name: Rol de solo lectura y vistas públicas
+        if: ${{ !inputs.solo_smoke_test }}
+        env:
+          CONSUMIDOR: ${{ vars.DATA_API_CONSUMIDOR }}
+          TIPO_CONSUMIDOR: ${{ vars.DATA_API_TIPO_CONSUMIDOR || 'SERVICE_PRINCIPAL' }}
+        run: |
+          source scripts/comun.sh
+          if [[ -z "${CONSUMIDOR}" ]]; then
+            echo "::warning::Define la variable DATA_API_CONSUMIDOR (email o application ID del consumidor). Se omite este paso."
+            exit 0
+          fi
+          lb_psql -v consumidor="${CONSUMIDOR}" -v tipo_consumidor="${TIPO_CONSUMIDOR}" \
+                  -v pg_schema="${PG_SCHEMA}" -f sql/01_rol_data_api.sql
+
+      # ---------- 5. Verificación funcional ----------
+      - name: Smoke test del Data API
+        env:
+          DATA_API_URL: ${{ vars.DATA_API_URL }}
+          DATA_API_CLIENT_ID: ${{ secrets.DATA_API_CLIENT_ID }}
+          DATA_API_CLIENT_SECRET: ${{ secrets.DATA_API_CLIENT_SECRET }}
+          DATA_API_TOKEN: ${{ secrets.DATA_API_TOKEN }}
+        run: bash scripts/smoke_test.sh
+
+      - name: Resumen
+        if: always()
+        run: |
+          {
+            echo "### Sandbox Lakebase"
+            echo "- Proyecto: \`${PROJECT_ID}\` · run: \`${{ inputs.run_id }}\`"
+            echo "- Datos: ${{ inputs.num_pacientes }} pacientes, notas de ~${{ inputs.nota_bytes }} bytes"
+            echo "- Para destruir: workflow **Sandbox Lakebase - destruir**"
+          } >> "$GITHUB_STEP_SUMMARY"

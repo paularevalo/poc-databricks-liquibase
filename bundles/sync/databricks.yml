@@ -1,0 +1,52 @@
+# Bundle 2/2 — Synced tables (Delta en UC → Lakebase Postgres)
+#
+# Va separado del bundle de infraestructura porque las tablas Delta de origen
+# deben existir antes de crear las synced tables (las genera el job del bundle 1).
+# Tener estado separado también permite destruirlo primero, como recomienda
+# Databricks (borrar synced tables antes que el proyecto).
+#
+# postgres_synced_tables requiere Databricks CLI >= 1.0.0 (Beta).
+
+bundle:
+  name: lakebase-sandbox-sync
+
+variables:
+  project_id:
+    default: hcl-sandbox
+  catalog:
+    default: workspace
+  schema:
+    default: hcl_sintetico
+  postgres_database:
+    description: Base Postgres destino (la que crea el proyecto por defecto)
+    default: databricks_postgres
+
+resources:
+  postgres_synced_tables:
+    atenciones:
+      synced_table_id: atenciones
+      branch: projects/${var.project_id}/branches/production
+      postgres_database: ${var.postgres_database}
+      source_table_full_name: ${var.catalog}.${var.schema}.atenciones
+      primary_key_columns: [atencion_id]
+      scheduling_policy: SNAPSHOT
+      create_database_objects_if_missing: true
+      new_pipeline_spec:
+        storage_catalog: ${var.catalog}
+        storage_schema: ${var.schema}
+
+    pacientes:
+      synced_table_id: pacientes
+      branch: projects/${var.project_id}/branches/production
+      postgres_database: ${var.postgres_database}
+      source_table_full_name: ${var.catalog}.${var.schema}.pacientes
+      primary_key_columns: [paciente_id]
+      scheduling_policy: SNAPSHOT
+      create_database_objects_if_missing: true
+      new_pipeline_spec:
+        storage_catalog: ${var.catalog}
+        storage_schema: ${var.schema}
+
+targets:
+  sandbox:
+    default: true
