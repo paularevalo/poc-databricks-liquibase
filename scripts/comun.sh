@@ -7,7 +7,8 @@ set -euo pipefail
 : "${ENDPOINT_ID:=primary}"          # endpoint por defecto que Lakebase crea en el branch production
 : "${PG_DATABASE:=databricks_postgres}"
 : "${UC_SCHEMA:=hcl_sintetico}"
-: "${PG_SCHEMA:=${UC_SCHEMA}}"       # las synced tables quedan en un esquema con el nombre del esquema UC (verificar)
+: "${SERVING_SCHEMA:=hcl_serving}"
+: "${PG_SCHEMA:=${SERVING_SCHEMA}}"  # synced_table_id = catalog.<schema>.<tabla> → tabla <tabla> en el esquema Postgres <schema>
 
 BRANCH_PATH="projects/${PROJECT_ID}/branches/${BRANCH_ID}"
 ENDPOINT_PATH="${BRANCH_PATH}/endpoints/${ENDPOINT_ID}"

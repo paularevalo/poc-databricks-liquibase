@@ -31,6 +31,7 @@ env:
   PROJECT_ID: ${{ vars.PROJECT_ID || 'hcl-sandbox' }}
   UC_CATALOG: ${{ vars.UC_CATALOG || 'workspace' }}
   UC_SCHEMA: ${{ vars.UC_SCHEMA || 'hcl_sintetico' }}
+  SERVING_SCHEMA: ${{ vars.SERVING_SCHEMA || 'hcl_serving' }}
   CLI_VERSION: "1.21.0"
 
 jobs:
@@ -88,7 +89,7 @@ jobs:
         run: >
           databricks bundle deploy -t sandbox --auto-approve
           --var="project_id=${PROJECT_ID}"
-          --var="catalog=${UC_CATALOG}" --var="schema=${UC_SCHEMA}"
+          --var="catalog=${UC_CATALOG}" --var="schema=${UC_SCHEMA}" --var="serving_schema=${SERVING_SCHEMA}"
 
       - name: Esperar carga inicial
         if: ${{ !inputs.solo_smoke_test }}

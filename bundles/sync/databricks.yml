@@ -5,6 +5,11 @@
 # Tener estado separado también permite destruirlo primero, como recomienda
 # Databricks (borrar synced tables antes que el proyecto).
 #
+# synced_table_id es el nombre UC COMPLETO del destino: {catalog}.{schema}.{table}.
+# Ese nombre define también la tabla en Postgres: tabla {table} en el esquema {schema}.
+# No puede coincidir con la tabla Delta de origen, por eso el destino va en un
+# esquema aparte (serving_schema).
+#
 # postgres_synced_tables requiere Databricks CLI >= 1.0.0 (Beta).
 
 bundle:
@@ -16,15 +21,25 @@ variables:
   catalog:
     default: workspace
   schema:
+    description: Esquema UC de las tablas Delta de origen
     default: hcl_sintetico
+  serving_schema:
+    description: Esquema UC (y Postgres) de destino de las synced tables
+    default: hcl_serving
   postgres_database:
     description: Base Postgres destino (la que crea el proyecto por defecto)
     default: databricks_postgres
 
 resources:
+  schemas:
+    serving:
+      catalog_name: ${var.catalog}
+      name: ${var.serving_schema}
+      comment: "Synced tables de historias clinicas SINTETICAS servidas desde Lakebase."
+
   postgres_synced_tables:
     atenciones:
-      synced_table_id: atenciones
+      synced_table_id: ${resources.schemas.serving.catalog_name}.${resources.schemas.serving.name}.atenciones
       branch: projects/${var.project_id}/branches/production
       postgres_database: ${var.postgres_database}
       source_table_full_name: ${var.catalog}.${var.schema}.atenciones
@@ -36,7 +51,7 @@ resources:
         storage_schema: ${var.schema}
 
     pacientes:
-      synced_table_id: pacientes
+      synced_table_id: ${resources.schemas.serving.catalog_name}.${resources.schemas.serving.name}.pacientes
       branch: projects/${var.project_id}/branches/production
       postgres_database: ${var.postgres_database}
       source_table_full_name: ${var.catalog}.${var.schema}.pacientes

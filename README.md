@@ -85,8 +85,8 @@ despliegue con `solo_smoke_test = true`.
   Google o Microsoft. **No confirmé** que puedas crear service principals ni personal access tokens en
   Free Edition. Si no puedes, el paso de autenticación desde GitHub será el bloqueante; los bundles
   funcionan igual desde tu máquina con `databricks auth login`.
-- **Esquema Postgres destino** de las synced tables: se asume que se llama igual que el esquema UC
-  (`hcl_sintetico`). Si no, ajusta la variable `PG_SCHEMA` en `scripts/comun.sh`.
+- **Destino de las synced tables**: `workspace.hcl_serving.<tabla>` en UC, que en Postgres queda como
+  `hcl_serving.<tabla>` (así lo define `synced_table_id`). Cambia el esquema con la variable `SERVING_SCHEMA`.
 - **Dos synced tables** en Free Edition (*una pipeline activa por tipo*): si la segunda falla por ese
   límite, vuelve a ejecutar el despliegue o comenta `pacientes` en `bundles/sync/databricks.yml`.
 - **Catálogo por defecto** `workspace`: es un supuesto. Cámbialo con la variable `UC_CATALOG` si tu

@@ -23,6 +23,7 @@ env:
   PROJECT_ID: ${{ vars.PROJECT_ID || 'hcl-sandbox' }}
   UC_CATALOG: ${{ vars.UC_CATALOG || 'workspace' }}
   UC_SCHEMA: ${{ vars.UC_SCHEMA || 'hcl_sintetico' }}
+  SERVING_SCHEMA: ${{ vars.SERVING_SCHEMA || 'hcl_serving' }}
   CLI_VERSION: "1.21.0"
 
 jobs:
@@ -44,7 +45,7 @@ jobs:
         run: >
           databricks bundle destroy -t sandbox --auto-approve
           --var="project_id=${PROJECT_ID}"
-          --var="catalog=${UC_CATALOG}" --var="schema=${UC_SCHEMA}"
+          --var="catalog=${UC_CATALOG}" --var="schema=${UC_SCHEMA}" --var="serving_schema=${SERVING_SCHEMA}"
           || echo "::warning::bundle sync ya estaba destruido o falló; se continúa"
 
       - name: Conservar el esquema UC (si se pidió)
@@ -75,8 +76,10 @@ jobs:
           fi
           # Si el esquema sobrevivió (p. ej. tablas creadas fuera del bundle)
           if [[ "${{ inputs.borrar_datos_delta }}" == "true" ]]; then
-            databricks schemas delete "${UC_CATALOG}.${UC_SCHEMA}" --force 2>/dev/null \
-              && echo "Esquema ${UC_CATALOG}.${UC_SCHEMA} eliminado" || true
+            for esq in "${SERVING_SCHEMA}" "${UC_SCHEMA}"; do
+              databricks schemas delete "${UC_CATALOG}.${esq}" --force 2>/dev/null \
+                && echo "Esquema ${UC_CATALOG}.${esq} eliminado" || true
+            done
           fi
 
       - name: Verificación final
