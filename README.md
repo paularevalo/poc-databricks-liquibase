@@ -26,6 +26,7 @@ GitHub Actions ──CLI──▶ Bundle infra ──▶ Proyecto Lakebase (bran
 | `scripts/*.sh` | Espera de la sincronización, habilitación del Data API, smoke test |
 | `.github/workflows/deploy.yml` | Despliegue completo (manual, `workflow_dispatch`) |
 | `.github/workflows/destroy.yml` | Destrucción + verificación de que no quedó nada |
+| `.github/workflows/loadtest.yml` + `loadtest/k6_data_api.js` | Prueba de capacidad: TPS máximo que cumple el SLO |
 
 ## Configuración en GitHub
 
@@ -65,6 +66,23 @@ Crea también un **environment** `sandbox` (Settings → Environments) y, si qui
 
 Para repetir solo la verificación (por ejemplo, después de habilitar el Data API a mano), ejecuta el
 despliegue con `solo_smoke_test = true`.
+
+## Prueba de capacidad (`loadtest.yml`)
+
+**Actions → "Sandbox Lakebase - prueba de capacidad"**. Usa k6 (`ramping-arrival-rate`) con escalones de
+TPS fijos y evalúa el SLO **por escalón**. El resultado es el **TPS máximo garantizado**: el escalón más alto
+que cumple p95, errores y tasa lograda (≥ 95% de la objetivo) **sin que haya fallado ninguno anterior**.
+
+- Mezcla de consultas (hipótesis, edítala en `loadtest/k6_data_api.js`): 60% lookup por PK, 25% historial de
+  paciente, 10% ficha de paciente, 5% filtro por servicio. IDs aleatorios en el rango real de datos.
+- Salida: resumen en la página del run y artefacto con `resultado.md`, `resultado.json` y el resumen de k6.
+- Con los valores por defecto dura ~28 min. Un `DATA_API_TOKEN` de usuario expira en ~1 h; el workflow
+  se niega a correr pruebas más largas salvo que uses un service principal consumidor.
+
+**Límites de interpretación:** la latencia se mide desde el runner de GitHub, así que incluye red. El
+resultado vale solo para este compute y este dataset (~100k filas). Lo que sí se extrapola es la relación
+TPS/CU y el comportamiento por tipo de consulta. ⚠️ En Free Edition, superar la cuota de uso justo apaga
+el cómputo el resto del día: empieza con escalones bajos.
 
 ## Qué está verificado y qué no
 

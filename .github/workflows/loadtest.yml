@@ -1,0 +1,145 @@
+name: Sandbox Lakebase - prueba de capacidad
+
+# ⚠️ En Free Edition, superar la cuota de uso justo APAGA el cómputo el resto del día
+# (o del mes, en casos extremos). Empieza con tasas bajas.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pasos:
+        description: "TPS objetivo por escalón, separados por coma"
+        default: "25,50,100,200,400"
+      duracion_paso_s:
+        description: "Segundos sostenidos por escalón"
+        default: "300"
+      calentamiento_s:
+        description: "Segundos iniciales descartados (cold start / caché)"
+        default: "120"
+      slo_p95_ms:
+        description: "SLO de latencia p95 (ms)"
+        default: "300"
+      slo_error_pct:
+        description: "SLO de errores (%)"
+        default: "1"
+      max_vus:
+        description: "Tope de usuarios virtuales k6"
+        default: "400"
+
+concurrency:
+  group: lakebase-sandbox
+  cancel-in-progress: false
+
+env:
+  DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+  DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+  DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+  DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+  PROJECT_ID: ${{ vars.PROJECT_ID || 'hcl-sandbox' }}
+  CLI_VERSION: "1.21.0"
+
+jobs:
+  capacidad:
+    runs-on: ubuntu-latest
+    environment: sandbox
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: databricks/setup-cli@main
+        with:
+          version: ${{ env.CLI_VERSION }}
+
+      - uses: grafana/setup-k6-action@v1
+
+      - name: Validar duración vs. vida del token
+        run: |
+          n=$(echo "${{ inputs.pasos }}" | tr ',' '\n' | grep -c .)
+          total=$(( ${{ inputs.calentamiento_s }} + n * (${{ inputs.duracion_paso_s }} + 15) ))
+          echo "Duración estimada: $((total / 60)) min"
+          echo "TOTAL_S=${total}" >> "$GITHUB_ENV"
+          if [[ -z "${{ secrets.DATA_API_CLIENT_ID }}" && ${total} -gt 3000 ]]; then
+            echo "::error::La prueba dura $((total/60)) min y un DATA_API_TOKEN de usuario expira en ~1 h. Reduce escalones/duración o usa un service principal consumidor (DATA_API_CLIENT_ID/SECRET)."
+            exit 1
+          fi
+
+      - name: Token del consumidor
+        env:
+          DATA_API_CLIENT_ID: ${{ secrets.DATA_API_CLIENT_ID }}
+          DATA_API_CLIENT_SECRET: ${{ secrets.DATA_API_CLIENT_SECRET }}
+          DATA_API_TOKEN: ${{ secrets.DATA_API_TOKEN }}
+        run: |
+          if [[ -n "${DATA_API_CLIENT_ID}" && -n "${DATA_API_CLIENT_SECRET}" ]]; then
+            tok=$(curl -fsS -u "${DATA_API_CLIENT_ID}:${DATA_API_CLIENT_SECRET}" \
+                  -d 'grant_type=client_credentials&scope=all-apis' \
+                  "${DATABRICKS_HOST%/}/oidc/v1/token" | jq -r .access_token)
+          else
+            tok="${DATA_API_TOKEN}"
+          fi
+          [[ -n "${tok}" ]] || { echo "::error::Sin token del consumidor"; exit 1; }
+          echo "::add-mask::${tok}"
+          echo "DATA_API_TOKEN=${tok}" >> "$GITHUB_ENV"
+
+      - name: URL del Data API y tamaño de datos
+        env:
+          DATA_API_URL: ${{ vars.DATA_API_URL || secrets.DATA_API_URL }}
+        run: |
+          source scripts/comun.sh
+          if [[ -z "${DATA_API_URL}" ]]; then
+            db="$(db_resource_name || true)"
+            DATA_API_URL="$( { databricks postgres get-data-api "${db}/data-api" -o json 2>/dev/null || true; } \
+                            | jq -r '[.. | strings | select(startswith("https://"))][0] // empty' || true)"
+          fi
+          [[ -n "${DATA_API_URL}" ]] || { echo "::error::Define DATA_API_URL"; exit 1; }
+          echo "DATA_API_URL=${DATA_API_URL%/}" >> "$GITHUB_ENV"
+          # Rango real de IDs, para no consultar IDs inexistentes
+          cnt() { curl -fsS -o /dev/null -D - -H "Authorization: Bearer ${DATA_API_TOKEN}" -H "Prefer: count=exact" \
+                    "${DATA_API_URL%/}/public/$1?limit=1&select=$2" | tr -d '\r' | awk -F/ 'tolower($0) ~ /^content-range/ {print $2}'; }
+          na=$(cnt atenciones atencion_id || true); np=$(cnt pacientes paciente_id || true)
+          echo "atenciones=${na:-?} pacientes=${np:-?}"
+          echo "NUM_ATENCIONES=${na:-100000}" >> "$GITHUB_ENV"
+          echo "NUM_PACIENTES=${np:-10000}" >> "$GITHUB_ENV"
+
+      - name: Configuración del compute (antes)
+        run: |
+          databricks postgres get-endpoint "projects/${PROJECT_ID}/branches/production/endpoints/primary" -o json \
+            | jq '.status | {autoscaling_limit_min_cu, autoscaling_limit_max_cu, current_state}' | tee compute_antes.json \
+            || echo "{}" > compute_antes.json
+          curl -fsS -o /dev/null -w 'Latencia de red runner→Data API (1 request): %{time_total}s\n' \
+            -H "Authorization: Bearer ${DATA_API_TOKEN}" "${DATA_API_URL}/public/atenciones?limit=1" || true
+
+      - name: Ejecutar k6
+        env:
+          PASOS: ${{ inputs.pasos }}
+          DURACION_PASO_S: ${{ inputs.duracion_paso_s }}
+          CALENTAMIENTO_S: ${{ inputs.calentamiento_s }}
+          SLO_P95_MS: ${{ inputs.slo_p95_ms }}
+          SLO_ERROR_PCT: ${{ inputs.slo_error_pct }}
+          MAX_VUS: ${{ inputs.max_vus }}
+        # k6 sale con código != 0 si algún umbral falla; es esperado (buscamos el punto de quiebre)
+        run: k6 run --quiet loadtest/k6_data_api.js || echo "k6 terminó con umbrales incumplidos (esperado en los escalones altos)"
+
+      - name: Configuración del compute (después)
+        if: always()
+        run: |
+          databricks postgres get-endpoint "projects/${PROJECT_ID}/branches/production/endpoints/primary" -o json \
+            | jq '.status | {autoscaling_limit_min_cu, autoscaling_limit_max_cu, current_state}' | tee compute_despues.json || true
+
+      - name: Publicar resultado
+        if: always()
+        run: |
+          {
+            cat resultado.md 2>/dev/null || echo "No se generó resultado.md"
+            echo; echo "**Compute (antes):** \`$(jq -c . compute_antes.json 2>/dev/null)\`"
+            echo; echo "Revisa en Lakebase App → Monitoring los CU y conexiones durante la ventana de la prueba."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: resultado-capacidad-${{ github.run_id }}
+          path: |
+            resultado.md
+            resultado.json
+            k6-summary.json
+            compute_*.json
+          if-no-files-found: warn
