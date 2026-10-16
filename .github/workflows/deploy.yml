@@ -13,7 +13,7 @@ on:
         description: "Tamaño aprox. de la nota clínica por atención (bytes)"
         default: "2000"
       solo_smoke_test:
-        description: "Saltar despliegue y solo repetir el smoke test"
+        description: "Saltar despliegue, datos y sync; solo Data API, roles y smoke test"
         type: boolean
         default: false
 
@@ -97,11 +97,9 @@ jobs:
 
       # ---------- 4. Data API ----------
       - name: Habilitar Data API
-        if: ${{ !inputs.solo_smoke_test }}
         run: bash scripts/habilitar_data_api.sh
 
       - name: Rol de solo lectura y vistas públicas
-        if: ${{ !inputs.solo_smoke_test }}
         env:
           CONSUMIDOR: ${{ vars.DATA_API_CONSUMIDOR }}
           TIPO_CONSUMIDOR: ${{ vars.DATA_API_TIPO_CONSUMIDOR || 'SERVICE_PRINCIPAL' }}

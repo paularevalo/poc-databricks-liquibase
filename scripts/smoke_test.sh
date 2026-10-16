@@ -10,9 +10,9 @@ source "$(dirname "$0")/comun.sh"
 
 # --- URL del Data API ---
 if [[ -z "${DATA_API_URL:-}" ]]; then
-  db_name="$(db_resource_name)"
-  DATA_API_URL="$(databricks postgres get-data-api "${db_name}/data-api" -o json 2>/dev/null \
-                  | jq -r '[.. | strings | select(startswith("https://"))][0] // empty')"
+  db_name="$(db_resource_name || true)"
+  DATA_API_URL="$( { databricks postgres get-data-api "${db_name}/data-api" -o json 2>/dev/null || true; } \
+                  | jq -r '[.. | strings | select(startswith("https://"))][0] // empty' || true)"
 fi
 if [[ -z "${DATA_API_URL:-}" ]]; then
   echo "::warning::No se pudo obtener la URL del Data API. Cópiala de Lakebase App > Data API > API URL y guárdala como variable DATA_API_URL del repositorio."
