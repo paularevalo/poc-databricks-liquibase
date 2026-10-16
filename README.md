@@ -59,6 +59,10 @@ Crea también un **environment** `sandbox` (Settings → Environments) y, si qui
 3. **Actions → "Sandbox Lakebase - destruir"**, escribiendo `DESTRUIR`. El workflow falla si el
    proyecto sigue existiendo, incluso en soft-delete.
 
+> **Paso manual obligatorio (verificado):** después de crear o cambiar vistas/tablas, pulsa
+> **Lakebase App → Data API → Refresh schema cache**. El `NOTIFY pgrst, 'reload schema'` del script SQL
+> **no** recarga la caché del Data API de Lakebase; sin el refresh, el API responde `404 PGRST205`.
+
 Para repetir solo la verificación (por ejemplo, después de habilitar el Data API a mano), ejecuta el
 despliegue con `solo_smoke_test = true`.
 
@@ -76,9 +80,8 @@ despliegue con `solo_smoke_test = true`.
   concurrentes, una pipeline activa por tipo, acceso saliente a internet restringido.
 
 **No verificado / supuestos** (pueden requerir ajuste en tu primer despliegue):
-- **El generador PySpark no se ejecutó**: en el entorno donde se preparó no había acceso a PyPI para
-  instalar Spark. Solo pasó la verificación de sintaxis y una revisión manual. Corre primero con escala
-  pequeña.
+- ~~El generador PySpark no se ejecutó~~ **Validado** en Free Edition: generó los datos, se sincronizaron a
+  Lakebase y se consultaron por el Data API.
 - **Data API por CLI**: `postgres create-data-api` existe, pero está **oculto y marcado como Private
   Preview**. Si falla, el workflow deja un aviso y lo habilitas desde la UI (Lakebase App → Data API).
 - **Free Edition y automatización**: la documentación indica que el login de usuarios es solo por OTP,
