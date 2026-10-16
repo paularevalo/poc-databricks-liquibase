@@ -101,13 +101,13 @@ jobs:
 
       - name: Rol de solo lectura y vistas públicas
         env:
-          CONSUMIDOR: ${{ vars.DATA_API_CONSUMIDOR }}
-          TIPO_CONSUMIDOR: ${{ vars.DATA_API_TIPO_CONSUMIDOR || 'SERVICE_PRINCIPAL' }}
+          CONSUMIDOR: ${{ vars.DATA_API_CONSUMIDOR || secrets.DATA_API_CONSUMIDOR }}
+          TIPO_CONSUMIDOR: ${{ vars.DATA_API_TIPO_CONSUMIDOR || secrets.DATA_API_TIPO_CONSUMIDOR || 'SERVICE_PRINCIPAL' }}
         run: |
           source scripts/comun.sh
           if [[ -z "${CONSUMIDOR}" ]]; then
-            echo "::warning::Define la variable DATA_API_CONSUMIDOR (email o application ID del consumidor). Se omite este paso."
-            exit 0
+            echo "::error::Falta DATA_API_CONSUMIDOR (email o application ID del consumidor), como variable o secret del repositorio. Sin él no se crean el rol ni las vistas y el Data API no encontrará las tablas."
+            exit 1
           fi
           lb_psql -v consumidor="${CONSUMIDOR}" -v tipo_consumidor="${TIPO_CONSUMIDOR}" \
                   -v pg_schema="${PG_SCHEMA}" -f sql/01_rol_data_api.sql
@@ -115,7 +115,7 @@ jobs:
       # ---------- 5. Verificación funcional ----------
       - name: Smoke test del Data API
         env:
-          DATA_API_URL: ${{ vars.DATA_API_URL }}
+          DATA_API_URL: ${{ vars.DATA_API_URL || secrets.DATA_API_URL }}
           DATA_API_CLIENT_ID: ${{ secrets.DATA_API_CLIENT_ID }}
           DATA_API_CLIENT_SECRET: ${{ secrets.DATA_API_CLIENT_SECRET }}
           DATA_API_TOKEN: ${{ secrets.DATA_API_TOKEN }}

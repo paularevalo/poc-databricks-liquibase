@@ -44,6 +44,9 @@ probar() {  # probar <descripcion> <ruta+query>
     printf '  OK   %-40s %4s ms  filas=%s\n' "${desc}" "$(awk "BEGIN{printf \"%d\", ${ms}*1000}")" "$(jq 'length' "${salida}")"
   else
     printf '  FAIL %-40s HTTP %s\n' "${desc}" "${codigo}"; head -c 400 "${salida}"; echo
+    if grep -q PGRST205 "${salida}"; then
+      echo "::warning::El Data API no ve la tabla/vista (PGRST205). Causas probables: el paso de roles y vistas no se ejecutó, o falta refrescar la caché: Lakebase App > Data API > Refresh schema cache."
+    fi
     fallos=$((fallos + 1))
   fi
 }

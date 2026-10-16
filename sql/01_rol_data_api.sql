@@ -39,6 +39,11 @@ CREATE OR REPLACE VIEW public.pacientes WITH (security_invoker = true) AS
 GRANT USAGE ON SCHEMA public TO :"consumidor";
 GRANT SELECT ON public.atenciones, public.pacientes TO :"consumidor";
 
+-- Pide al Data API recargar su caché de esquema (mecanismo estándar de PostgREST).
+-- NO verificado que la implementación de Lakebase lo atienda: si las vistas no aparecen,
+-- usa el botón "Refresh schema cache" en Lakebase App > Data API.
+NOTIFY pgrst, 'reload schema';
+
 -- Verificación
 SELECT table_schema, table_name, privilege_type
 FROM information_schema.role_table_grants
